@@ -1,0 +1,15 @@
+# Project Antigravity Knowledge Base & Overview
+
+## Introduction
+Antigravity RAG System is an advanced retrieval-augmented generation framework designed to process custom documents, index them using dense vector embeddings, and generate accurate context-aware responses using Large Language Models.
+
+## Key Architecture Components
+1. Document Ingestion: Supports multi-format parsing including PDFs via PyPDFLoader, Markdown, and TXT files.
+2. Text Splitting: Utilizes RecursiveCharacterTextSplitter with chunk size 1000 characters and 200 overlap to preserve semantic context across chunk boundaries.
+3. Vector Storage: Embedded using OpenAI text-embedding-3-small and stored persistently in ChromaDB vector database.
+4. RAG Chain: Employs LangChain Expression Language (LCEL) with history-aware context retrieval to support conversational multi-turn dialogues.
+
+## System Features
+- Persistent vector indexing to prevent re-embedding on every session.
+- Source citation tracing: Output provides explicit references to source documents and metadata.
+- Interactive CLI and API ready structure for quick deployment.

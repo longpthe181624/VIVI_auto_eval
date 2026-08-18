@@ -1,0 +1,26 @@
+# LangChain Core & Integrations
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-huggingface>=0.1.0
+langchain-chroma>=0.1.0
+langchain-text-splitters>=0.3.0
+
+# Vector Database & Embedding Fallbacks
+chromadb>=0.5.0
+openai>=1.0.0
+sentence-transformers>=3.0.0
+huggingface-hub
+
+# Document & Excel Parsing
+openpyxl>=3.1.0
+pypdf>=4.0.0
+pandas>=2.0.0
+
+# Web Search & Utilities
+duckduckgo-search>=6.0.0
+ddgs>=9.0.0
+python-dotenv>=1.0.0
+requests
+tqdm

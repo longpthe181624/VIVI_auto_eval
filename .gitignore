@@ -1,0 +1,26 @@
+# Environment & Secret files
+.env
+myenv/
+venv/
+.venv/
+env/
+
+# Python cache & build outputs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local Vector Database & Indices
+db/
+db_rules/
+
+# Generated Evaluation Output Excel files
+data/evaluated_*.xlsx
+evaluated_*.xlsx
+
+# IDE & OS settings
+.vscode/
+.idea/
+.DS_Store
