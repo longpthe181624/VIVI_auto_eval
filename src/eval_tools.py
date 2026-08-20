@@ -201,18 +201,9 @@ def compare_expected_actual(expected_values: Any, actual_values: Any) -> Dict[st
 _CACHED_RULES_VECTORSTORE = None
 
 def get_rules_vectorstore(force_reload: bool = False):
-    global _CACHED_RULES_VECTORSTORE
-    if _CACHED_RULES_VECTORSTORE is None or force_reload:
-        import os
-        from langchain_community.vectorstores import Chroma
-        if not os.path.exists(config.RULES_CHROMA_DB_DIR):
-            return None
-        embeddings = config.get_embedding_model()
-        _CACHED_RULES_VECTORSTORE = Chroma(
-            persist_directory=config.RULES_CHROMA_DB_DIR,
-            embedding_function=embeddings,
-        )
-    return _CACHED_RULES_VECTORSTORE
+    """Returns the unified Chroma vector store."""
+    from src.rag_chain import get_vector_store
+    return get_vector_store(force_reload=force_reload)
 
 
 _WEB_SEARCH_CACHE = {}
@@ -253,7 +244,7 @@ _RULE_SEARCH_CACHE = {}
 
 
 def rag_rule_search(query: str, top_k: int = 3) -> Dict[str, Any]:
-    """Search rules vector DB for evaluation guidelines, command specs, and preconditions with memory-efficient caching."""
+    """Search unified vector DB for command rules and specs with memory-efficient caching."""
     clean_q = query.strip().lower()
     cache_key = (clean_q, int(top_k))
 
@@ -261,11 +252,20 @@ def rag_rule_search(query: str, top_k: int = 3) -> Dict[str, Any]:
         return _RULE_SEARCH_CACHE[cache_key]
 
     try:
-        vectorstore = get_rules_vectorstore()
+        from src.rag_chain import get_vector_store
+        vectorstore = get_vector_store()
         if vectorstore is None:
-            return {"query": query, "found_chunks": 0, "results": [], "error": f"Rules DB directory '{config.RULES_CHROMA_DB_DIR}' not found."}
+            return {"query": query, "found_chunks": 0, "results": [], "error": f"Vector DB directory '{config.CHROMA_DB_DIR}' not found."}
         
-        docs = vectorstore.similarity_search(query, k=int(top_k))
+        # Try metadata filtered search first, fallback to standard similarity search
+        try:
+            docs = vectorstore.similarity_search(query, k=int(top_k), filter={"doc_type": "command_rule"})
+        except Exception:
+            docs = []
+        
+        if not docs:
+            docs = vectorstore.similarity_search(query, k=int(top_k))
+
         results = []
         for idx, doc in enumerate(docs, 1):
             results.append({
@@ -288,11 +288,21 @@ def rag_rule_search(query: str, top_k: int = 3) -> Dict[str, Any]:
 
 
 def rag_spec_search(query: str, top_k: int = 3) -> Dict[str, Any]:
-    """Search vector DB in RAG-build-demo-1 for requirement/spec chunks."""
+    """Search unified vector DB for Owner Manuals and general knowledge chunks."""
     try:
         from src.rag_chain import get_vector_store
         vectorstore = get_vector_store()
-        docs = vectorstore.similarity_search(query, k=int(top_k))
+        if vectorstore is None:
+            return {"query": query, "found_chunks": 0, "results": []}
+
+        try:
+            docs = vectorstore.similarity_search(query, k=int(top_k), filter={"doc_type": "owner_manual"})
+        except Exception:
+            docs = []
+
+        if not docs:
+            docs = vectorstore.similarity_search(query, k=int(top_k))
+
         results = []
         for idx, doc in enumerate(docs, 1):
             results.append({

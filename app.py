@@ -12,7 +12,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.ingest import ingest_documents
-from src.ingest_rules import ingest_rules
 from src.excel_evaluator import ExcelTestEvaluator
 from src.rag_chain import RAGChatbot
 from src.test_eval_agent import TestEvalAgent
@@ -25,29 +24,22 @@ def print_banner():
     print("=" * 60)
     print(" Commands:")
     print("  - Type your question to query your indexed documents")
-    print("  - '/eval-excel'  : Run full automatic evaluation on Excel test cases")
-    print("  - '/ingest-rules': Index/Update chatbot evaluation rules & command lists")
-    print("  - '/eval'        : Interactive single test case evaluation & RCA")
-    print("  - '/ingest'      : Re-index knowledge documents in data/")
-    print("  - '/clear'       : Reset conversation chat history")
-    print("  - '/exit'        : Quit engine")
+    print("  - '/eval-excel': Run full automatic evaluation on Excel test cases")
+    print("  - '/eval'      : Interactive single test case evaluation & RCA")
+    print("  - '/ingest'    : Re-index all manuals, knowledge & rules in data/")
+    print("  - '/clear'     : Reset conversation chat history")
+    print("  - '/exit'      : Quit engine")
     print("=" * 60 + "\n")
 
 
 def main():
     print_banner()
 
-    # Check if vector DB exists, offer ingestion if missing
+    # Check if unified vector DB exists, offer ingestion if missing
     if not os.path.exists(config.CHROMA_DB_DIR):
         print(f"⚠️ Vector database not found at '{config.CHROMA_DB_DIR}'.")
-        print("Running initial document ingestion from 'data/'...\n")
+        print("Running initial document & rules ingestion from 'data/'...\n")
         ingest_documents()
-        print("-" * 60)
-
-    if not os.path.exists(config.RULES_CHROMA_DB_DIR):
-        print(f"⚠️ Rules vector database not found at '{config.RULES_CHROMA_DB_DIR}'.")
-        print("Indexing chatbot evaluation rules...\n")
-        ingest_rules()
         print("-" * 60)
 
     try:
@@ -71,17 +63,11 @@ def main():
                 print("\nGoodbye! 👋\n")
                 break
 
-            if user_input.lower() == "/ingest":
-                print("\n🔄 Re-indexing documents...")
+            if user_input.lower() in ["/ingest", "/ingest-rules"]:
+                print("\n🔄 Re-indexing all manuals, rules, and documents...")
                 ingest_documents()
                 chatbot = RAGChatbot()
-                print("✅ Ingestion complete! Chatbot updated.\n")
-                continue
-
-            if user_input.lower() == "/ingest-rules":
-                print("\n🔄 Re-indexing evaluation rules and command lists...")
-                ingest_rules()
-                print("✅ Rules vector store updated!\n")
+                print("✅ Unified ingestion complete! Chatbot updated.\n")
                 continue
 
             if user_input.lower() == "/eval-excel":

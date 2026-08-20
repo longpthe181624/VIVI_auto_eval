@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIVI Auto-Eval Desktop Tool</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- TOP HEADER NAVIGATION -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-title">VIVI AUTO-EVAL</span>
+      <span class="brand-subtitle">Automated AI Test Evaluation Engine</span>
+    </div>
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-eval">Batch Evaluation</button>
+      <button class="tab-btn" data-tab="tab-chat">RAG Knowledge Assistant</button>
+      <button class="tab-btn" data-tab="tab-single">Single RCA Workbench</button>
+      <button class="tab-btn" data-tab="tab-data">Data Source Manager</button>
+    </nav>
+  </header>
+
+  <!-- MAIN CONTENT CONTAINER -->
+  <main class="app-container">
+
+    <!-- TAB 1: BATCH EXCEL EVALUATION HUB -->
+    <section id="tab-eval" class="tab-content active">
+      <div class="card upload-card">
+        <h2 class="card-title">Batch Excel Suite Ingestion</h2>
+        <p class="card-desc">Select or drop a test case workbook (.xlsx) to execute streaming automated evaluation against indexed rules and manuals.</p>
+        
+        <div class="drop-zone" id="drop-zone">
+          <input type="file" id="excel-file-input" accept=".xlsx" hidden>
+          <div class="drop-zone-text">
+            <span>Drag and drop testcase file here, or <button class="btn-link" id="btn-browse-excel">Browse File</button></span>
+            <div id="file-name-display" class="file-selected-text">No file selected</div>
+          </div>
+        </div>
+
+        <div class="upload-actions">
+          <button class="btn btn-primary" id="btn-start-eval" disabled>Start Evaluation Run</button>
+        </div>
+      </div>
+
+      <!-- PROGRESS & TELEMETRY PANEL -->
+      <div class="card progress-card hidden" id="progress-panel">
+        <div class="progress-header">
+          <span class="progress-title" id="progress-status-text">Evaluation Initializing...</span>
+          <span class="progress-pct-badge" id="progress-pct-text">0.0%</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-bar-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="progress-count-text">Processed: 0 / 0 rows</span>
+          <span id="progress-rate-text">Rate: 0.0 rows/sec</span>
+        </div>
+      </div>
+
+      <!-- STAT CARDS -->
+      <div class="stats-grid hidden" id="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Total Cases</span>
+          <span class="stat-value" id="stat-total">0</span>
+        </div>
+        <div class="stat-card pass">
+          <span class="stat-label">Pass Rate</span>
+          <span class="stat-value" id="stat-pass-rate">0.0%</span>
+        </div>
+        <div class="stat-card fail">
+          <span class="stat-label">Fail Count</span>
+          <span class="stat-value" id="stat-fail">0</span>
+        </div>
+        <div class="stat-card retest">
+          <span class="stat-label">Retest Count</span>
+          <span class="stat-value" id="stat-retest">0</span>
+        </div>
+      </div>
+
+      <!-- RESULTS DATA GRID -->
+      <div class="card table-card hidden" id="results-panel">
+        <div class="table-toolbar">
+          <div class="filter-group">
+            <button class="filter-btn active" data-filter="ALL">ALL</button>
+            <button class="filter-btn pass" data-filter="PASS">PASS</button>
+            <button class="filter-btn fail" data-filter="FAIL">FAIL</button>
+            <button class="filter-btn retest" data-filter="RETEST">RETEST</button>
+          </div>
+          <div class="search-group">
+            <input type="text" id="eval-search-input" placeholder="Search test cases, queries, or results...">
+            <button class="btn btn-secondary" id="btn-download-report">Download Report (.xlsx)</button>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table class="data-table" id="results-table">
+            <thead>
+              <tr>
+                <th>Test ID</th>
+                <th>Status</th>
+                <th>Score</th>
+                <th>User Command</th>
+                <th>Actual Response</th>
+                <th>Matched Spec / Rule</th>
+                <th>Root Cause Analysis</th>
+              </tr>
+            </thead>
+            <tbody id="results-table-body">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: RAG KNOWLEDGE ASSISTANT -->
+    <section id="tab-chat" class="tab-content">
+      <div class="chat-layout">
+        <div class="card chat-controls-card">
+          <h3 class="card-title">Knowledge Controls</h3>
+          <div class="form-group">
+            <label for="chat-model-select">Target Vehicle Model</label>
+            <select id="chat-model-select" class="form-control">
+              <option value="">All Models (VF3 - VF9)</option>
+              <option value="VF8">VinFast VF8</option>
+              <option value="VF9">VinFast VF9</option>
+              <option value="VF7">VinFast VF7</option>
+              <option value="VF6">VinFast VF6</option>
+              <option value="VF5">VinFast VF5</option>
+              <option value="VF3">VinFast VF3</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="chat-lang-select">Language Filter</label>
+            <select id="chat-lang-select" class="form-control">
+              <option value="">Vietnamese & English</option>
+              <option value="vi">Vietnamese (VI)</option>
+              <option value="en">English (EN)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card chat-workspace-card">
+          <div class="chat-messages" id="chat-messages-container">
+            <div class="chat-bubble system">
+              RAG Chatbot Assistant initialized. Query 1.18M+ words across all VinFast vehicle manuals.
+            </div>
+          </div>
+
+          <div class="chat-input-row">
+            <textarea id="chat-input" class="chat-textarea" placeholder="Type vehicle query (e.g. Hướng dẫn sạc pin xe VF8)..." rows="2"></textarea>
+            <button class="btn btn-primary" id="btn-send-chat">Send Query</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: SINGLE TEST CASE RCA WORKBENCH -->
+    <section id="tab-single" class="tab-content">
+      <div class="single-eval-layout">
+        <div class="card form-card">
+          <h2 class="card-title">Single Test Case Execution</h2>
+          <form id="single-eval-form">
+            <div class="form-group">
+              <label for="single-test-id">Test Case Name / ID</label>
+              <input type="text" id="single-test-id" class="form-control" value="TC_Single_Debug">
+            </div>
+            <div class="form-group">
+              <label for="single-user-cmd">User Command / Query</label>
+              <textarea id="single-user-cmd" class="form-control" rows="3" required placeholder="Enter user command (e.g. Hướng dẫn sử dụng phanh tay điện tử)"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="single-actual-resp">Actual Chatbot Response</label>
+              <textarea id="single-actual-resp" class="form-control" rows="3" required placeholder="Enter actual bot output"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="single-expected-resp">Expected Behavior (Optional)</label>
+              <textarea id="single-expected-resp" class="form-control" rows="2" placeholder="Enter reference ground truth answer"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" id="btn-run-single-eval">Execute Analysis</button>
+          </form>
+        </div>
+
+        <div class="card result-card" id="single-result-panel">
+          <h2 class="card-title">Diagnostic Results</h2>
+          <div id="single-result-content">
+            <p class="placeholder-text">Submit a query pair on the left to view single-row diagnostic results, match score, and root cause analysis.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: KNOWLEDGE DATA SOURCE & CATEGORY MANAGER -->
+    <section id="tab-data" class="tab-content">
+      <div class="data-manager-layout">
+        <!-- UPLOAD SOURCE TO CATEGORY CARD -->
+        <div class="card upload-source-card">
+          <h2 class="card-title">Add New Knowledge Data Source</h2>
+          <p class="card-desc">Upload reference documents (.txt, .pdf, .xlsx) directly into targeted category folders to expand the vector database.</p>
+
+          <form id="data-upload-form">
+            <div class="form-group">
+              <label for="data-category-select">Target Category Folder</label>
+              <select id="data-category-select" class="form-control" required>
+                <!-- Populated dynamically -->
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="data-file-input">Select Data File</label>
+              <input type="file" id="data-file-input" class="form-control" accept=".txt,.pdf,.md,.xlsx" required>
+            </div>
+
+            <button type="submit" class="btn btn-primary" id="btn-upload-source">Upload & Index File</button>
+          </form>
+        </div>
+
+        <!-- EMBEDDED SOURCES INVENTORY TABLE -->
+        <div class="card sources-inventory-card">
+          <div class="inventory-header">
+            <div>
+              <h2 class="card-title">Embedded Data Sources Inventory</h2>
+              <span class="card-subtitle" id="inventory-count-text">Total Vectors: 0</span>
+            </div>
+            <button class="btn btn-secondary" id="btn-refresh-sources">Refresh Inventory</button>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Source File Name</th>
+                  <th>Vector Chunks</th>
+                  <th>Indexing Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="sources-table-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

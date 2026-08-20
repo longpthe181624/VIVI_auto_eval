@@ -147,6 +147,20 @@ def should_trigger_web_search(user_cmd: str, actual_resp: str) -> bool:
     return False
 
 
+def detect_testcase_category(file_name: str, sheet_name: str) -> str:
+    """Auto-detects whether a test case workbook or sheet belongs to owner_manual, command_rule, general_knowledge, error_code, etc."""
+    combined = f"{file_name} {sheet_name}".lower()
+    if any(k in combined for k in ["thuongthuc", "thưởng thức", "general", "trivia", "web_search", "sensitive"]):
+        return "general_knowledge"
+    elif any(k in combined for k in ["command", "_va_", "va_command", "lệnh", "tính năng", "feature"]):
+        return "command_rule"
+    elif re.search(r"\bom\b|om\d+|manual|hướng dẫn|huong dan|chủ sở hữu", combined):
+        return "owner_manual"
+    elif any(k in combined for k in ["dtc", "error", "mã lỗi"]):
+        return "error_code"
+    return "general"
+
+
 from src.eval_router import AdaptiveEvalRouter
 
 
@@ -162,10 +176,11 @@ class ExcelTestEvaluator:
         name: str,
         user_cmd: str,
         actual_resp: str,
-        expected_resp: str
+        expected_resp: str,
+        category: str = None
     ) -> Dict[str, Any]:
         """Evaluates a single test case row via multi-tiered adaptive routing."""
-        return self.router.evaluate(name, user_cmd, actual_resp, expected_resp)
+        return self.router.evaluate(name, user_cmd, actual_resp, expected_resp, testcase_category=category)
 
     def evaluate_file(self, input_excel_path: str, output_excel_path: str = None) -> str:
         """Evaluates all test cases in an Excel file using lightweight streaming mode to prevent memory bloat."""
@@ -246,6 +261,8 @@ class ExcelTestEvaluator:
                     cell.font = HEADER_FONT
                     cell.alignment = Alignment(horizontal="center", vertical="center")
 
+            file_category = detect_testcase_category(input_path.name, sheet_name)
+
             # Process test case data rows
             for r_idx, row_vals in enumerate(raw_rows_buffer, 1):
                 name_val = str(row_vals[col_map.get("name", 0)]) if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] else f"TC_{r_idx}"
@@ -260,7 +277,8 @@ class ExcelTestEvaluator:
                     name=name_val,
                     user_cmd=user_cmd,
                     actual_resp=actual_resp,
-                    expected_resp=expected_resp
+                    expected_resp=expected_resp,
+                    category=file_category
                 )
 
                 status = res["auto_result"]

@@ -19,6 +19,7 @@ db_rules/
 # Generated Evaluation Output Excel files
 data/evaluated_*.xlsx
 evaluated_*.xlsx
+data/temp_uploads/
 
 # IDE & OS settings
 .vscode/

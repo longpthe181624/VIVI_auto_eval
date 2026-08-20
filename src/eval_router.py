@@ -5,7 +5,8 @@ Dynamic Multi-Tiered Evaluation Router for Diverse Chatbot Test Case Categories.
 import re
 from typing import Dict, Any
 import src.config as config
-from src.eval_tools import rag_rule_search, web_search_verification, compute_similarity, eval_test_result
+from pathlib import Path
+from src.eval_tools import rag_rule_search, rag_spec_search, web_search_verification, compute_similarity, eval_test_result
 
 
 def normalize_text(text: str) -> str:
@@ -79,7 +80,7 @@ class AdaptiveEvalRouter:
         # Tier 5: General Conversational / Open-Ended Query
         return "GENERAL_CONVERSATIONAL"
 
-    def evaluate(self, name: str, user_cmd: str, actual_resp: str, expected_resp: str) -> Dict[str, Any]:
+    def evaluate(self, name: str, user_cmd: str, actual_resp: str, expected_resp: str, testcase_category: str = None) -> Dict[str, Any]:
         actual_clean = actual_resp.strip() if actual_resp else ""
         expected_clean = expected_resp.strip() if expected_resp else ""
         user_cmd_clean = user_cmd.strip() if user_cmd else ""
@@ -113,11 +114,39 @@ class AdaptiveEvalRouter:
         rule_summary = "N/A"
         if has_domain_kw:
             search_query = f"{user_cmd_clean} {expected_clean[:200]}".strip()
-            rules_res = rag_rule_search(query=search_query, top_k=2)
-            rule_chunks = rules_res.get("results", [])
+
+            # Category-targeted search logic
+            if testcase_category == "owner_manual" or ("om" in (testcase_category or "").lower()):
+                spec_res = rag_spec_search(query=search_query, top_k=2)
+                spec_chunks = spec_res.get("results", [])
+                rules_res = rag_rule_search(query=search_query, top_k=1)
+                rule_chunks = rules_res.get("results", [])
+            elif testcase_category == "command_rule" or ("command" in (testcase_category or "").lower()):
+                rules_res = rag_rule_search(query=search_query, top_k=2)
+                rule_chunks = rules_res.get("results", [])
+                spec_res = rag_spec_search(query=search_query, top_k=1)
+                spec_chunks = spec_res.get("results", [])
+            else:
+                spec_res = rag_spec_search(query=search_query, top_k=2)
+                spec_chunks = spec_res.get("results", [])
+                rules_res = rag_rule_search(query=search_query, top_k=2)
+                rule_chunks = rules_res.get("results", [])
+
+            # Build clear, source-labeled rule_summary
+            summaries = []
+            if spec_chunks:
+                top_spec = spec_chunks[0]
+                src_name = Path(top_spec.get('source', '')).name
+                summaries.append(f"[Owner Manual] {src_name}: {top_spec.get('content', '')[:100]}...")
             if rule_chunks:
                 top_rule = rule_chunks[0]
-                rule_summary = f"{top_rule.get('source', '')} ({top_rule.get('sheet', '')}): {top_rule.get('content', '')[:100]}..."
+                src_name = Path(top_rule.get('source', '')).name
+                sheet = top_rule.get('sheet', '')
+                sheet_str = f" ({sheet})" if sheet else ""
+                summaries.append(f"[Command Rule] {src_name}{sheet_str}: {top_rule.get('content', '')[:100]}...")
+
+            if summaries:
+                rule_summary = " | ".join(summaries)
 
         # 3. Classify Test Type
         category = self.classify_test_type(user_cmd_clean, actual_clean, expected_clean, rule_chunks)
