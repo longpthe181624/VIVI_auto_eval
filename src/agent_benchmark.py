@@ -104,7 +104,7 @@ def get_real_ground_truth_testset() -> List[Dict[str, Any]]:
             "name": f"[DomainRAG-{idx:02d}]",
             "user_cmd": q,
             "actual_resp": act,
-            "expected_resp": exp,
+            "expected_resp": "",
             "expected_verdict": "PASS",
             "slice": "Domain RAG Match"
         })

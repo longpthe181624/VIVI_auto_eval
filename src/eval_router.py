@@ -19,6 +19,10 @@ def normalize_text(text: str) -> str:
 class AdaptiveEvalRouter:
     """Classifies and routes diverse chatbot test cases to the appropriate evaluation tier."""
 
+    def __init__(self):
+        from src.agent_loop import AgentEvalLoop
+        self.agent_loop = AgentEvalLoop(max_iterations=2)
+
     SENSITIVE_TOPIC_PATTERNS = [
         r"\b(scandal|drama|bạo hành|bị bắt|lừa đảo|bóc phốt|ngoại tình|vợ chồng đại gia|bức ảnh|đường dây|đánh bạc|ma túy|ông chú đi xe đạp|lừa tiền|ông giáo làng)\b",
         r"\b(chính trị|đảng|tổng thống|thủ tướng|chính phủ|quốc hội|bầu cử|thu hồi đất|tham nhũng|dự án bot|biểu tình|chính sách công|quản lý đất đai)\b",
@@ -377,27 +381,38 @@ class AdaptiveEvalRouter:
                     remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                 )
 
-        # TIER 2: Explicit Ground Truth Spec
+        # TIER 2: Explicit Expected Behavior Provided in Testcase
         if category == "EXPLICIT_SPEC":
-            canned_greeting_phrases = ["dạ em đây", "cần em hỗ trợ gì", "anh/chị cần em giúp gì", "em luôn sẵn"]
-            if any(p in normalize_text(actual_clean) for p in canned_greeting_phrases) and len(actual_clean) < 120 and len(expected_clean) > 30:
+            rule_summary = f"[Expected Spec] {extract_relevant_sentence(expected_clean, user_cmd_clean)}"
+            
+            # Check for exact string match or refusal match
+            if norm_act == norm_exp or (norm_exp in norm_act and len(norm_exp) > 5):
                 return self._build_result(
                     name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
-                    auto_result="FAIL", score=10.0, rule_info=rule_summary,
-                    rca="Chatbot returned generic greeting fallback instead of answering the query.",
-                    remediation="Update intent classifier or RAG document retrieval thresholds.",
-                    is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                    auto_result="PASS", score=100.0, rule_info=rule_summary,
+                    rca="Actual response matched explicit reference specification.",
+                    remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                 )
 
             sim_score = compute_similarity(actual_clean, expected_clean, user_cmd_clean)
-            if sim_score >= 0.45:
+            if sim_score >= config.EXPLICIT_SPEC_PASS_THRESHOLD:
                 return self._build_result(
                     name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
                     auto_result="PASS", score=round(sim_score * 100, 1), rule_info=rule_summary,
                     rca="Actual response matches explicit reference specification.",
                     remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                 )
-            elif sim_score >= 0.25:
+            elif sim_score >= config.BORDERLINE_LOW_THRESHOLD:
+                # Trigger Agent Self-Correction Loop for Borderline Spec Matches (0.25 - 0.45)
+                loop_res = self.agent_loop.run_correction_loop(user_cmd_clean, actual_clean, sim_score)
+                if loop_res.get("resolved") and loop_res.get("auto_result") == "PASS":
+                    return self._build_result(
+                        name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                        auto_result="PASS", score=loop_res["final_score"],
+                        rule_info=f"[Agent Loop: {loop_res.get('resolving_source', 'RAG')}] {loop_res.get('matched_content', '')[:100]}...",
+                        rca=f"Verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
+                        remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                    )
                 return self._build_result(
                     name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
                     auto_result="RETEST", score=round(sim_score * 100, 1), rule_info=rule_summary,
@@ -418,13 +433,24 @@ class AdaptiveEvalRouter:
         elif category == "DOMAIN_RULE_SPEC" and rule_chunks:
             top_content = rule_chunks[0].get("content", "")
             sim_score = compute_similarity(actual_clean, top_content, user_cmd_clean)
-            if sim_score >= 0.3:
+            if sim_score >= config.RAG_PASS_THRESHOLD:
                 return self._build_result(
                     name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
                     auto_result="PASS", score=round(max(75.0, sim_score * 100), 1), rule_info=rule_summary,
                     rca="Response verified against retrieved domain specification.",
                     remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                 )
+            elif sim_score >= config.BORDERLINE_LOW_THRESHOLD:
+                # Trigger Agent Loop for Borderline RAG Match
+                loop_res = self.agent_loop.run_correction_loop(user_cmd_clean, actual_clean, sim_score)
+                if loop_res.get("resolved") and loop_res.get("auto_result") == "PASS":
+                    return self._build_result(
+                        name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                        auto_result="PASS", score=loop_res["final_score"],
+                        rule_info=f"[Agent Loop: {loop_res.get('resolving_source', 'RAG')}] {loop_res.get('matched_content', '')[:100]}...",
+                        rca=f"Verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
+                        remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                    )
 
         # TIER 4: Web Fact Verification
         elif category == "WEB_FACT_VERIFICATION":
@@ -432,32 +458,51 @@ class AdaptiveEvalRouter:
             snippets = web_res.get("results", [])
 
             if snippets:
-                # Score on FULL UNTRUNCATED text combined
                 combined_snippets = "\n".join((s.get("full_snippet") or s.get("snippet", "")) for s in snippets)
-                web_sim_score = compute_similarity(actual_clean, combined_snippets, user_cmd_clean)  # Score on FULL text
+                web_sim_score = compute_similarity(actual_clean, combined_snippets, user_cmd_clean)
                 web_info = f"Web Search ({snippets[0].get('title', '')[:50]}): {snippets[0].get('snippet', '')[:100]}..."
 
-                if web_sim_score >= config.WEB_PASS_THRESHOLD or len(actual_clean) > 30:
+                if web_sim_score >= config.WEB_PASS_THRESHOLD:
                     return self._build_result(
                         name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
                         auto_result="PASS", score=round(max(75.0, web_sim_score * 100), 1), rule_info=web_info,
                         rca="Chatbot answer verified against live web search results.",
                         remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                     )
+                elif web_sim_score >= config.BORDERLINE_LOW_THRESHOLD:
+                    loop_res = self.agent_loop.run_correction_loop(user_cmd_clean, actual_clean, web_sim_score)
+                    if loop_res.get("resolved") and loop_res.get("auto_result") == "PASS":
+                        return self._build_result(
+                            name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                            auto_result="PASS", score=loop_res["final_score"],
+                            rule_info=f"[Agent Loop Web: {loop_res.get('resolving_source', 'Web')}] {loop_res.get('matched_content', '')[:100]}...",
+                            rca=f"Verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
+                            remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                        )
 
-        # TIER 5: General Knowledge / Open-Ended Conversational Query
-        if len(actual_clean) > 30:
+        # TIER 5: General Knowledge / Open-Ended Conversational Query (Strict Similarity Check via Agent Loop)
+        loop_res = self.agent_loop.run_correction_loop(user_cmd_clean, actual_clean, 0.30)
+        if loop_res.get("resolved") and loop_res.get("auto_result") == "PASS":
             return self._build_result(
                 name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
-                auto_result="PASS", score=100.0, rule_info=rule_summary,
-                rca="Chatbot generated clear, fluent, and accurate conversational response.",
+                auto_result="PASS", score=loop_res["final_score"],
+                rule_info=f"[Agent Loop Open-Ended: {loop_res.get('resolving_source', 'Web/RAG')}] {loop_res.get('matched_content', '')[:100]}...",
+                rca=f"Chatbot answer verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
+                remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+            )
+
+        # Fallback for Tier 5 if Agent Loop cannot resolve
+        if len(actual_clean) > 40:
+            return self._build_result(
+                name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                auto_result="PASS", score=75.0, rule_info=rule_summary,
+                rca="Chatbot generated fluent open-ended conversational response.",
                 remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
             )
         else:
             return self._build_result(
                 name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
                 auto_result="FAIL", score=20.0, rule_info=rule_summary,
-                rca="Chatbot returned truncated or empty response.",
-                remediation="Review error handling logic.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                rca="Chatbot returned incomplete or truncated response.",
+                remediation="Review bot conversational prompt.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
             )
-

@@ -300,7 +300,11 @@ def web_search_verification(query: str, max_results: int = 3) -> Dict[str, Any]:
         }
 
     try:
-        from ddgs import DDGS
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            from ddgs import DDGS
+
         results = []
         with DDGS(timeout=2) as ddgs:
             raw_res = list(ddgs.text(query, max_results=int(max_results)))
