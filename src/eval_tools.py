@@ -277,6 +277,7 @@ class BatchHealthMonitor:
         self.alert_msg = ""
 
 
+_WEB_SEARCH_CACHE = {}
 GLOBAL_HEALTH_MONITOR = BatchHealthMonitor(error_rate_threshold=0.15, window=50)
 
 

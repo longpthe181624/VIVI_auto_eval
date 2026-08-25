@@ -31,6 +31,48 @@ def calculate_semantic_error_pct(sim_score: float) -> float:
     return round(error_pct, 1)
 
 
+def compute_semantic_diff(expected_text: str, actual_text: str) -> Dict[str, Any]:
+    """Performs word/phrase-level semantic diff between actual response and expected spec."""
+    import re
+    if not expected_text or not actual_text:
+        return {
+            "missing_keywords": [],
+            "extra_keywords": [],
+            "coverage_pct": 100.0 if not expected_text else 0.0,
+            "diff_summary": "No explicit expected spec text available for token comparison."
+        }
+
+    stopwords = {"là", "của", "và", "được", "trên", "xe", "cho", "có", "này", "khi", "để", "bị", "các", "những", "với", "trong", "thì"}
+    
+    exp_words = [w for w in re.findall(r'\w+', expected_text.lower()) if len(w) > 1 and w not in stopwords]
+    act_words = set(w for w in re.findall(r'\w+', actual_text.lower()) if len(w) > 1 and w not in stopwords)
+
+    if not exp_words:
+        return {
+            "missing_keywords": [],
+            "extra_keywords": [],
+            "coverage_pct": 100.0,
+            "diff_summary": "Expected spec contains no key non-stopword tokens."
+        }
+
+    missing = [w for w in exp_words if w not in act_words]
+    # Unique missing keywords
+    unique_missing = list(dict.fromkeys(missing))
+    
+    coverage = ((len(exp_words) - len(missing)) / float(len(exp_words))) * 100.0
+
+    if unique_missing:
+        diff_summary = f"Semantic Diff Failure: Actual response is missing critical key terms from expected spec: {unique_missing[:5]}. Match coverage: {coverage:.1f}%."
+    else:
+        diff_summary = f"Semantic Token Match: All key terms from expected spec are present in actual response. Match coverage: {coverage:.1f}%."
+
+    return {
+        "missing_keywords": unique_missing,
+        "coverage_pct": round(coverage, 1),
+        "diff_summary": diff_summary
+    }
+
+
 def classify_severity(auto_result: str, sim_score: float, is_stt_mismatch: bool = False, is_false_refusal: bool = False) -> str:
     """Classifies evaluation failure into 3 Severity Tiers: HIGH, MEDIUM, LOW, or PASS."""
     if auto_result == "PASS" and sim_score >= 0.85:
@@ -93,6 +135,9 @@ def generate_trace_log(
         if "url" in retrieved_chunks[0]:
             resolving_url = retrieved_chunks[0]["url"]
 
+    # Compute word/phrase-level semantic diff for auditability
+    semantic_diff = compute_semantic_diff(expected_resp, actual_resp)
+
     return {
         "trace_id": trace_id,
         "test_id": test_id,
@@ -114,6 +159,9 @@ def generate_trace_log(
         "semantic_error_pct": error_pct,
         "severity": severity,
         "error_category": error_cat,
+
+        # Word & Phrase Level Semantic Diff
+        "semantic_diff": semantic_diff,
 
         # Auditability: Which Chunk or URL resolved the verdict
         "resolved_by": resolved_by or ("Explicit Spec" if expected_resp else ("RAG Vector DB" if retrieved_chunks else "Web Fact Verification")),

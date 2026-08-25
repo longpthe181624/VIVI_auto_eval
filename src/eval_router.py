@@ -91,6 +91,14 @@ class AdaptiveEvalRouter:
     ) -> Dict[str, Any]:
         """Helper to construct enriched evaluation result with trace_id, severity, and error metrics."""
         sim_val = score / 100.0
+        
+        # Perform real word/phrase-level semantic diff on FAIL or RETEST when expected spec exists
+        if auto_result in ["FAIL", "RETEST"] and expected_resp:
+            from src.eval_trace import compute_semantic_diff
+            diff_res = compute_semantic_diff(expected_resp, actual_resp)
+            if diff_res.get("missing_keywords"):
+                rca = f"{rca} [{diff_res['diff_summary']}]"
+
         trace = generate_trace_log(
             test_id=name,
             user_cmd=user_cmd,
