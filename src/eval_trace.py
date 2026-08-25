@@ -21,6 +21,7 @@ class ErrorCategory:
     FALSE_REFUSAL = "FALSE_REFUSAL"
     STT_ACOUSTIC_MISMATCH = "STT_ACOUSTIC_MISMATCH"
     COMPLETENESS_LOSS = "COMPLETENESS_LOSS"
+    INFRASTRUCTURE_OUTAGE = "INFRASTRUCTURE_OUTAGE"
     NONE = "NONE"
 
 
@@ -118,7 +119,9 @@ def generate_trace_log(
     severity = classify_severity(auto_result, sim_score, is_stt_mismatch, is_false_refusal)
 
     error_cat = ErrorCategory.NONE
-    if is_stt_mismatch:
+    if web_error and any(k in web_error for k in ["CIRCUIT_BREAKER", "FileNotFoundError", "NETWORK_TIMEOUT", "ConnectionRefused"]):
+        error_cat = ErrorCategory.INFRASTRUCTURE_OUTAGE
+    elif is_stt_mismatch:
         error_cat = ErrorCategory.STT_ACOUSTIC_MISMATCH
     elif is_false_refusal:
         error_cat = ErrorCategory.FALSE_REFUSAL

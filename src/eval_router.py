@@ -176,6 +176,8 @@ class AdaptiveEvalRouter:
         norm_lis = normalize_text(vivi_listen_clean)
         norm_exp = normalize_text(expected_clean)
 
+        rule_summary = f"[Expected Spec] {extract_relevant_sentence(expected_clean, user_cmd_clean)}" if expected_clean else "N/A"
+
         # STT Hearing Mismatch Check
         is_stt_mismatch = False
         if norm_lis and norm_usr and norm_lis != norm_usr:
@@ -491,18 +493,11 @@ class AdaptiveEvalRouter:
                 remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
             )
 
-        # Fallback for Tier 5 if Agent Loop cannot resolve
-        if len(actual_clean) > 40:
-            return self._build_result(
-                name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
-                auto_result="PASS", score=75.0, rule_info=rule_summary,
-                rca="Chatbot generated fluent open-ended conversational response.",
-                remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
-            )
-        else:
-            return self._build_result(
-                name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
-                auto_result="FAIL", score=20.0, rule_info=rule_summary,
-                rca="Chatbot returned incomplete or truncated response.",
-                remediation="Review bot conversational prompt.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
-            )
+        # Fallback for Tier 5 if Agent Loop cannot resolve unverified query
+        return self._build_result(
+            name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+            auto_result="RETEST", score=50.0, rule_info=rule_summary,
+            rca="Open-ended query unverified by local RAG or live Web Search; flagged for manual review (RETEST).",
+            remediation="Verify fact accuracy manually or add domain specification chunk to vector database.",
+            is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+        )
