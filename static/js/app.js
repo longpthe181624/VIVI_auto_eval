@@ -231,25 +231,80 @@ function initBatchEvaluation() {
 
     filtered.forEach((row) => {
       const tr = document.createElement("tr");
-      const badgeClass =
+      tr.style.cursor = "pointer";
+      tr.title = "Click to view full Trace Log & Diagnostic Details";
+      
+      const statusBadge =
         row.status === "PASS"
-          ? "badge-pass"
+          ? '<span class="badge badge-pass">PASS</span>'
           : row.status === "FAIL"
-          ? "badge-fail"
-          : "badge-retest";
+          ? '<span class="badge badge-fail">FAIL</span>'
+          : '<span class="badge badge-retest">RETEST</span>';
+
+      const sev = row.severity || "PASS";
+      const sevBadge =
+        sev === "HIGH"
+          ? '<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid #ef4444;">🚨 HIGH</span>'
+          : sev === "MEDIUM"
+          ? '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid #f59e0b;">⚠️ MED</span>'
+          : sev === "LOW"
+          ? '<span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #3b82f6;">ℹ️ LOW</span>'
+          : '<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981;">✅ OK</span>';
+
+      const errPct = row.semantic_error_pct !== undefined ? `${row.semantic_error_pct}%` : "0.0%";
 
       tr.innerHTML = `
-        <td><strong>${escapeHtml(row.id)}</strong></td>
-        <td><span class="badge ${badgeClass}">${row.status}</span></td>
-        <td>${row.score}%</td>
+        <td><strong>${escapeHtml(row.id)}</strong><br><small style="color: var(--text-muted); font-size:0.75rem;">${escapeHtml(row.trace_id || "")}</small></td>
+        <td>${statusBadge}<br>${sevBadge}</td>
+        <td><strong>${row.score}%</strong><br><small style="color: #ef4444;">Error: ${errPct}</small></td>
         <td>${escapeHtml(row.user_command)}</td>
         <td>${escapeHtml(row.actual_resp)}</td>
         <td>${escapeHtml(row.rule_info)}</td>
         <td>${escapeHtml(row.rca)}</td>
       `;
+
+      tr.addEventListener("click", () => showTraceModal(row));
       resultsTableBody.appendChild(tr);
     });
   }
+}
+
+function showTraceModal(row) {
+  let modal = document.getElementById("trace-log-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "trace-log-modal";
+    modal.style.cssText = "position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.75); backdrop-filter:blur(5px); z-index:9999; display:flex; align-items:center; justify-content:center;";
+    document.body.appendChild(modal);
+  }
+
+  const traceData = row.trace_log || row;
+  const traceJson = JSON.stringify(traceData, null, 2);
+
+  modal.innerHTML = `
+    <div style="background: var(--bg-card, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 12px; width: 80%; max-width: 850px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); overflow: hidden;">
+      <div style="padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; background: #0f172a;">
+        <h3 style="margin: 0; color: #f8fafc; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+          🔍 Evaluation Trace Log <span style="font-size:0.85rem; color:#94a3b8; font-weight:normal;">(${escapeHtml(row.id)})</span>
+        </h3>
+        <button id="close-trace-modal" style="background: transparent; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer;">&times;</button>
+      </div>
+      <div style="padding: 20px 24px; overflow-y: auto; color: #e2e8f0; font-family: monospace; font-size: 0.85rem;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; background: #0f172a; padding: 12px; border-radius: 8px; border: 1px solid #334155;">
+          <div><strong>Trace ID:</strong> ${escapeHtml(row.trace_id || 'N/A')}</div>
+          <div><strong>Severity:</strong> <span style="font-weight:bold; color: ${row.severity==='HIGH'?'#ef4444':row.severity==='MEDIUM'?'#f59e0b':'#10b981'};">${escapeHtml(row.severity || 'PASS')}</span></div>
+          <div><strong>Semantic Error %:</strong> ${row.semantic_error_pct || 0}%</div>
+          <div><strong>Error Category:</strong> ${escapeHtml(row.error_category || 'NONE')}</div>
+        </div>
+        <h4 style="margin: 12px 0 6px 0; color: #38bdf8;">Full Execution JSON Trace:</h4>
+        <pre style="background: #090d16; padding: 16px; border-radius: 8px; border: 1px solid #1e293b; overflow-x: auto; color: #a5f3fc;">${escapeHtml(traceJson)}</pre>
+      </div>
+    </div>
+  `;
+
+  modal.style.display = "flex";
+  document.getElementById("close-trace-modal").onclick = () => { modal.style.display = "none"; };
+  modal.onclick = (e) => { if (e.target === modal) modal.style.display = "none"; };
 }
 
 // -------------------------------------------------------------------

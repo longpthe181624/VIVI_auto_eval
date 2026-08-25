@@ -16,6 +16,12 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 
+# Evaluation Similarity Thresholds (Option A: Uncurated Web Fallback requires stricter bar)
+EXPLICIT_SPEC_PASS_THRESHOLD = 0.45
+RAG_PASS_THRESHOLD = 0.45
+WEB_PASS_THRESHOLD = 0.50  # Fallback web source needs to clear a HIGHER bar (0.50) to override ambiguous score
+BORDERLINE_LOW_THRESHOLD = 0.25
+
 _CACHED_EMBEDDING_MODEL = None
 
 def get_embedding_model():

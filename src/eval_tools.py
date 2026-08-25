@@ -14,6 +14,44 @@ def normalize_text(text: str) -> str:
     return " ".join(text.strip().split()).lower()
 
 
+def extract_relevant_sentence(text: str, query: str, max_chars: int = 160) -> str:
+    """Extracts the specific section title and exact sentence/phrase matching the query."""
+    if not text or not text.strip():
+        return ""
+    
+    clean_text = text.strip()
+    raw_segments = re.split(r'[\n\.\?!;]+', clean_text)
+    segments = [s.strip() for s in raw_segments if len(s.strip()) > 3]
+    
+    if not segments:
+        return clean_text[:max_chars]
+        
+    stopwords = {"là", "gì", "của", "và", "cho", "người", "xe", "trong", "được", "các", "với", "những", "để", "có", "thể", "nào", "này", "khi", "vf", "vf8", "vf8np"}
+    q_words = [w.lower() for w in re.findall(r"\w+", query) if w.lower() not in stopwords and len(w) > 1]
+    
+    header = ""
+    if len(segments) > 1 and len(segments[0]) < 45:
+        header = f"[{segments[0].title()}] "
+        candidate_segments = segments[1:]
+    else:
+        candidate_segments = segments
+
+    best_segment = candidate_segments[0]
+    best_score = -1
+    
+    for s in candidate_segments:
+        s_norm = s.lower()
+        score = sum(1 for w in q_words if w in s_norm)
+        if score > best_score:
+            best_score = score
+            best_segment = s
+            
+    res = f"{header}{best_segment}"
+    if len(res) > max_chars:
+        return res[:max_chars] + "..."
+    return res
+
+
 def compute_similarity(actual: str, expected: str, user_cmd: str = "") -> float:
     """Computes factual accuracy and keyword grounding similarity score (0.0 to 1.0)."""
     norm_act = normalize_text(actual)
@@ -206,38 +244,98 @@ def get_rules_vectorstore(force_reload: bool = False):
     return get_vector_store(force_reload=force_reload)
 
 
-_WEB_SEARCH_CACHE = {}
+import logging
+from collections import deque
+
+logger = logging.getLogger(__name__)
+
+class BatchHealthMonitor:
+    """Sliding-window health monitor and circuit breaker for batch evaluation web queries."""
+
+    def __init__(self, error_rate_threshold: float = 0.15, window: int = 50):
+        self.error_rate_threshold = error_rate_threshold
+        self.window = window
+        self.errors = deque(maxlen=window)
+        self.circuit_open = False
+        self.alert_msg = ""
+
+    def record(self, had_error: bool, error_details: str = ""):
+        self.errors.append(1 if had_error else 0)
+        if len(self.errors) == self.window:
+            rate = sum(self.errors) / float(self.window)
+            if rate > self.error_rate_threshold:
+                self.circuit_open = True
+                self.alert_msg = f"ALERT: Web search error rate {rate:.0%} over last {self.window} rows — check DDGS/network."
+                logger.error(self.alert_msg)
+
+    def is_circuit_open(self) -> bool:
+        return self.circuit_open
+
+    def reset(self):
+        self.errors.clear()
+        self.circuit_open = False
+        self.alert_msg = ""
+
+
+GLOBAL_HEALTH_MONITOR = BatchHealthMonitor(error_rate_threshold=0.15, window=50)
+
 
 def web_search_verification(query: str, max_results: int = 3) -> Dict[str, Any]:
-    """Queries DuckDuckGo live web search for factual verification with caching."""
+    """Queries DuckDuckGo live web search for factual verification with caching, fast 2s timeout, and narrowed exception handling."""
     clean_q = query.strip().lower()
     if not clean_q:
-        return {"query": query, "found_snippets": 0, "results": []}
+        return {"query": query, "found_snippets": 0, "results": [], "summary": ""}
     
     if clean_q in _WEB_SEARCH_CACHE:
         return _WEB_SEARCH_CACHE[clean_q]
 
+    if GLOBAL_HEALTH_MONITOR.is_circuit_open():
+        return {
+            "query": query,
+            "found_snippets": 0,
+            "results": [],
+            "summary": "",
+            "error": "CIRCUIT_BREAKER_OPEN: Web search suspended due to high fleet error rate (>15%)"
+        }
+
     try:
         from ddgs import DDGS
         results = []
-        with DDGS() as ddgs:
+        with DDGS(timeout=2) as ddgs:
             raw_res = list(ddgs.text(query, max_results=int(max_results)))
             for idx, r in enumerate(raw_res, 1):
                 results.append({
                     "rank": idx,
                     "title": r.get("title", ""),
-                    "snippet": r.get("body", "")[:300],
+                    "snippet": r.get("body", "")[:300],  # Display snippet
+                    "full_snippet": r.get("body", ""),     # Full text for similarity scoring
                     "url": r.get("href", "")
                 })
+        summary = " ".join([r["full_snippet"] for r in results])
         ret = {
             "query": query,
             "found_snippets": len(results),
-            "results": results
+            "results": results,
+            "summary": summary
         }
         _WEB_SEARCH_CACHE[clean_q] = ret
+        GLOBAL_HEALTH_MONITOR.record(had_error=False)
         return ret
-    except Exception as e:
-        return {"query": query, "found_snippets": 0, "results": [], "error": str(e)}
+    except (TimeoutError, Exception) as e:
+        err_type = type(e).__name__
+        err_msg = str(e)
+        
+        # Distinguish network/timeout vs code bugs
+        if any(k in err_type.lower() or k in err_msg.lower() for k in ["timeout", "connection", "http", "socket", "network"]):
+            formatted_err = f"NETWORK_TIMEOUT: {err_type}: {err_msg}"
+        else:
+            formatted_err = f"UNEXPECTED_ERROR: {err_type}: {err_msg}"
+            logger.error(f"Unexpected error in web_search_verification for query '{query}': {formatted_err}", exc_info=True)
+
+        GLOBAL_HEALTH_MONITOR.record(had_error=True, error_details=formatted_err)
+        empty_ret = {"query": query, "found_snippets": 0, "results": [], "summary": "", "error": formatted_err}
+        _WEB_SEARCH_CACHE[clean_q] = empty_ret
+        return empty_ret
 
 
 _RULE_SEARCH_CACHE = {}

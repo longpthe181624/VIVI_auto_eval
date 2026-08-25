@@ -156,17 +156,19 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
             file_category = detect_testcase_category(input_path.name, sheet_name)
 
             for r_idx, row_vals in enumerate(raw_rows_buffer, 1):
-                name_val = str(row_vals[col_map.get("name", 0)]) if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] else f"TC_{r_idx}"
-                user_cmd = str(row_vals[col_map.get("user_command", 1)]) if "user_command" in col_map and col_map["user_command"] < len(row_vals) and row_vals[col_map["user_command"]] else ""
-                actual_resp = str(row_vals[col_map.get("actual_resp", 3)]) if "actual_resp" in col_map and col_map["actual_resp"] < len(row_vals) and row_vals[col_map["actual_resp"]] else ""
-                expected_resp = str(row_vals[col_map.get("expected_resp", 4)]) if "expected_resp" in col_map and col_map["expected_resp"] < len(row_vals) and row_vals[col_map["expected_resp"]] else ""
+                name_val = str(row_vals[col_map["name"]]).strip() if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] is not None else f"TC_{r_idx}"
+                user_cmd = str(row_vals[col_map["user_command"]]).strip() if "user_command" in col_map and col_map["user_command"] < len(row_vals) and row_vals[col_map["user_command"]] is not None else ""
+                vivi_listen = str(row_vals[col_map["vivi_listen"]]).strip() if "vivi_listen" in col_map and col_map["vivi_listen"] < len(row_vals) and row_vals[col_map["vivi_listen"]] is not None else ""
+                actual_resp = str(row_vals[col_map["actual_resp"]]).strip() if "actual_resp" in col_map and col_map["actual_resp"] < len(row_vals) and row_vals[col_map["actual_resp"]] is not None else ""
+                expected_resp = str(row_vals[col_map["expected_resp"]]).strip() if "expected_resp" in col_map and col_map["expected_resp"] < len(row_vals) and row_vals[col_map["expected_resp"]] is not None else ""
 
                 res = evaluator.evaluate_row_sync(
                     name=name_val,
                     user_cmd=user_cmd,
                     actual_resp=actual_resp,
                     expected_resp=expected_resp,
-                    category=file_category
+                    category=file_category,
+                    vivi_listen=vivi_listen
                 )
 
                 status = res["auto_result"]
@@ -196,8 +198,13 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
                     "rule_info": res["rule_info"],
                     "rca": res["rca"],
                     "remediation": res["remediation"],
+                    "trace_id": res.get("trace_id", ""),
+                    "severity": res.get("severity", "PASS"),
+                    "semantic_error_pct": res.get("semantic_error_pct", 0.0),
+                    "error_category": res.get("error_category", "NONE"),
+                    "trace_log": res.get("trace_log", {})
                 }
-                if len(results_preview) < 500:
+                if status in ["FAIL", "RETEST"] or len(results_preview) < 5000:
                     results_preview.append(eval_row_data)
 
                 # Write output row

@@ -32,7 +32,7 @@ HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
 
 
 def _detect_columns(header_row: List[Any]) -> Dict[str, int]:
-    """Dynamically maps Excel column headers to standard evaluation fields."""
+    """Dynamically maps Excel column headers to standard evaluation fields with strict priority."""
     col_map = {}
     if not header_row:
         return col_map
@@ -42,21 +42,44 @@ def _detect_columns(header_row: List[Any]) -> Dict[str, int]:
     for idx, h in enumerate(header_strs):
         if not h:
             continue
+
         if any(k in h for k in ["auto_eval_result", "auto_eval"]):
             col_map.setdefault("auto_eval_start", idx)
-        elif any(k in h for k in ["name", "testcase", "test_case", "id", "tc"]):
+
+        # 1. Test Case Name
+        elif any(k in h for k in ["name_testcase", "testcase_name", "tc_name", "name testcase", "testcase", "test_case", "tc"]):
             col_map.setdefault("name", idx)
-        elif any(k in h for k in ["user_command", "command", "prompt", "query", "question", "câu_lệnh"]):
+        elif h in ["name", "id", "stt"]:
+            col_map.setdefault("name", idx)
+
+        # 2. User Command / Prompt
+        elif any(k in h for k in ["user_command", "user command", "câu_lệnh", "câu lệnh", "prompt", "query", "question"]):
             col_map.setdefault("user_command", idx)
-        elif any(k in h for k in ["actual_resp", "actual", "response", "model_answer", "phản_hồi_thực_tế"]):
-            col_map.setdefault("actual_resp", idx)
-        elif any(k in h for k in ["expected_resp", "expected", "ground_truth", "kết_quả_mong_muốn", "target"]):
-            col_map.setdefault("expected_resp", idx)
-        elif any(k in h for k in ["vivi_listen", "listen", "transcribed", "input"]):
+        elif h in ["command", "lệnh"]:
+            col_map.setdefault("user_command", idx)
+
+        # 3. Vivi Listen (STT Transcribed Input)
+        elif any(k in h for k in ["vivi_listen", "vivi listen", "listen", "transcribed", "nghe"]):
             col_map.setdefault("vivi_listen", idx)
-        elif any(k in h for k in ["result", "status", "trạng_thái"]):
+
+        # 4. Actual Response
+        elif any(k in h for k in ["actual_resp", "actual_response", "actual response", "actual", "model_answer", "phản_hồi_thực_tế", "phản hồi thực tế", "vivi_response", "vivi response"]):
+            col_map.setdefault("actual_resp", idx)
+        elif h in ["phản hồi", "phản_hồi"]:
+            col_map.setdefault("actual_resp", idx)
+
+        # 5. Expected Response / Ground Truth
+        elif any(k in h for k in ["expected_resp", "expected_response", "expected response", "expected", "ground_truth", "kết_quả_mong_muốn", "kết quả mong muốn", "target"]):
+            col_map.setdefault("expected_resp", idx)
+        elif h in ["kỳ vọng", "kỳ_vọng"]:
+            col_map.setdefault("expected_resp", idx)
+
+        # 6. Previous Result Status
+        elif h in ["result", "status", "trạng_thái", "kết quả", "kết_quả"]:
             col_map.setdefault("prev_result", idx)
-        elif any(k in h for k in ["latency", "time", "duration"]):
+
+        # 7. Latency / Time
+        elif any(k in h for k in ["latency", "time", "duration", "thời gian"]):
             col_map.setdefault("latency", idx)
 
     return col_map
@@ -177,10 +200,11 @@ class ExcelTestEvaluator:
         user_cmd: str,
         actual_resp: str,
         expected_resp: str,
-        category: str = None
+        category: str = None,
+        vivi_listen: str = ""
     ) -> Dict[str, Any]:
         """Evaluates a single test case row via multi-tiered adaptive routing."""
-        return self.router.evaluate(name, user_cmd, actual_resp, expected_resp, testcase_category=category)
+        return self.router.evaluate(name, user_cmd, actual_resp, expected_resp, testcase_category=category, vivi_listen=vivi_listen)
 
     def evaluate_file(self, input_excel_path: str, output_excel_path: str = None) -> str:
         """Evaluates all test cases in an Excel file using lightweight streaming mode to prevent memory bloat."""
@@ -192,11 +216,12 @@ class ExcelTestEvaluator:
         try:
             wb_in = openpyxl.load_workbook(input_path, read_only=True, data_only=True)
         except Exception as e:
-            raise ValueError(f"Could not open Excel file {input_excel_path}: {e}")
+            raise ValueError(f"Failed to parse Excel file '{input_excel_path}': {e}")
+
+        output_path = Path(output_excel_path) if output_excel_path else input_path.parent / f"evaluated_{input_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
         wb_out = openpyxl.Workbook()
-        # Remove default empty sheet
-        wb_out.remove(wb_out.active)
+        wb_out.remove(wb_out.active)  # Remove default blank sheet
 
         total_eval_count = 0
         pass_count = 0
@@ -263,24 +288,32 @@ class ExcelTestEvaluator:
 
             file_category = detect_testcase_category(input_path.name, sheet_name)
 
-            # Process test case data rows
-            for r_idx, row_vals in enumerate(raw_rows_buffer, 1):
-                name_val = str(row_vals[col_map.get("name", 0)]) if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] else f"TC_{r_idx}"
-                user_cmd = str(row_vals[col_map.get("user_command", 1)]) if "user_command" in col_map and col_map["user_command"] < len(row_vals) and row_vals[col_map["user_command"]] else ""
-                actual_resp = str(row_vals[col_map.get("actual_resp", 3)]) if "actual_resp" in col_map and col_map["actual_resp"] < len(row_vals) and row_vals[col_map["actual_resp"]] else ""
-                expected_resp = str(row_vals[col_map.get("expected_resp", 4)]) if "expected_resp" in col_map and col_map["expected_resp"] < len(row_vals) and row_vals[col_map["expected_resp"]] else ""
+            from concurrent.futures import ThreadPoolExecutor
 
-                if r_idx % 100 == 0:
-                    gc.collect()
+            # Process test case data rows in parallel using 16 worker threads
+            def process_row_item(item):
+                r_idx, row_vals = item
+                name_val = str(row_vals[col_map["name"]]).strip() if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] is not None else f"TC_{r_idx}"
+                user_cmd = str(row_vals[col_map["user_command"]]).strip() if "user_command" in col_map and col_map["user_command"] < len(row_vals) and row_vals[col_map["user_command"]] is not None else ""
+                vivi_listen = str(row_vals[col_map["vivi_listen"]]).strip() if "vivi_listen" in col_map and col_map["vivi_listen"] < len(row_vals) and row_vals[col_map["vivi_listen"]] is not None else ""
+                actual_resp = str(row_vals[col_map["actual_resp"]]).strip() if "actual_resp" in col_map and col_map["actual_resp"] < len(row_vals) and row_vals[col_map["actual_resp"]] is not None else ""
+                expected_resp = str(row_vals[col_map["expected_resp"]]).strip() if "expected_resp" in col_map and col_map["expected_resp"] < len(row_vals) and row_vals[col_map["expected_resp"]] is not None else ""
 
                 res = self.evaluate_row_sync(
                     name=name_val,
                     user_cmd=user_cmd,
                     actual_resp=actual_resp,
                     expected_resp=expected_resp,
-                    category=file_category
+                    category=file_category,
+                    vivi_listen=vivi_listen
                 )
+                return r_idx, row_vals, res
 
+            items = list(enumerate(raw_rows_buffer, 1))
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                eval_results = list(pool.map(process_row_item, items))
+
+            for r_idx, row_vals, res in eval_results:
                 status = res["auto_result"]
                 total_eval_count += 1
                 if status == "PASS":
@@ -295,7 +328,6 @@ class ExcelTestEvaluator:
 
                 # Build row values
                 base_row = list(row_vals[:max_col_idx])
-                # Pad if needed
                 while len(base_row) < max_col_idx:
                     base_row.append("")
 
@@ -304,12 +336,10 @@ class ExcelTestEvaluator:
                 ws_out.append(out_row_vals)
 
                 curr_row = ws_out.max_row
-                # Format status cell
                 c1 = ws_out.cell(row=curr_row, column=col_start_idx)
                 c1.fill = fill
                 c1.alignment = Alignment(horizontal="center")
 
-                # Overwrite pre-filled tool 'Result' column if present with AI verdict
                 if "prev_result" in col_map and col_map["prev_result"] < len(base_row):
                     orig_res_cell = ws_out.cell(row=curr_row, column=col_map["prev_result"] + 1, value=res["auto_result"])
                     orig_res_cell.fill = fill
