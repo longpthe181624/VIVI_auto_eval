@@ -453,6 +453,21 @@ class AdaptiveEvalRouter:
                         rca=f"Verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
                         remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                     )
+                return self._build_result(
+                    name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                    auto_result="RETEST", score=round(sim_score * 100, 1), rule_info=rule_summary,
+                    rca="Partial match with retrieved domain specification; requires manual review.",
+                    remediation="Verify manually or expand RAG knowledge base coverage for this query.",
+                    is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                )
+            else:
+                return self._build_result(
+                    name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                    auto_result="FAIL", score=round(sim_score * 100, 1), rule_info=rule_summary,
+                    rca=f"Response deviates significantly from retrieved domain specification ({top_content[:120]}...).",
+                    remediation="Review domain rules and update RAG knowledge context.",
+                    is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                )
 
         # TIER 4: Web Fact Verification
         elif category == "WEB_FACT_VERIFICATION":
@@ -481,6 +496,21 @@ class AdaptiveEvalRouter:
                             rca=f"Verified via Agent Self-Correction Loop ({loop_res.get('resolved_by')}).",
                             remediation="No action required.", is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
                         )
+                    return self._build_result(
+                        name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                        auto_result="RETEST", score=round(web_sim_score * 100, 1), rule_info=web_info,
+                        rca="Partial match with live web search results; requires manual review.",
+                        remediation="Verify fact accuracy manually against live web sources.",
+                        is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                    )
+                else:
+                    return self._build_result(
+                        name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
+                        auto_result="FAIL", score=round(web_sim_score * 100, 1), rule_info=web_info,
+                        rca="Chatbot answer contradicts or deviates significantly from live web search verification results.",
+                        remediation="Review factual accuracy; response may contain hallucinated information.",
+                        is_stt_mismatch=is_stt_mismatch, is_false_refusal=False, retrieved_chunks=rule_chunks
+                    )
 
         # TIER 5: General Knowledge / Open-Ended Conversational Query (Strict Similarity Check via Agent Loop)
         loop_res = self.agent_loop.run_correction_loop(user_cmd_clean, actual_clean, 0.30)

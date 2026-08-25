@@ -53,7 +53,15 @@ def extract_relevant_sentence(text: str, query: str, max_chars: int = 160) -> st
 
 
 def compute_similarity(actual: str, expected: str, user_cmd: str = "") -> float:
-    """Computes factual accuracy and keyword grounding similarity score (0.0 to 1.0)."""
+    """Computes factual accuracy and keyword grounding similarity score (0.0 to 1.0).
+
+    Uses precision+recall (F1) over the unique non-stopword vocabulary shared between
+    actual and expected. Precision alone (how much of actual's vocab is grounded in
+    expected) is not sufficient: a short generic response sharing only a handful of
+    common words with a long expected spec can hit high precision while covering
+    almost none of the expected content. Recall (how much of expected's distinctive
+    content is actually covered) is required to catch that case.
+    """
     norm_act = normalize_text(actual)
     norm_exp = normalize_text(expected)
     norm_usr = normalize_text(user_cmd)
@@ -73,19 +81,32 @@ def compute_similarity(actual: str, expected: str, user_cmd: str = "") -> float:
     words_exp = [w for w in re.findall(r"\w+", norm_exp) if w not in stopwords and len(w) > 1]
     words_usr = [w for w in re.findall(r"\w+", norm_usr) if w not in stopwords and len(w) > 1]
 
-    if not words_act:
+    if not words_act or not words_exp:
         return 0.0
 
+    set_act = set(words_act)
     set_exp = set(words_exp)
+    matched = set_act & set_exp
 
-    matched_in_exp = sum(1 for w in words_act if w in set_exp)
-    recall_exp = matched_in_exp / len(words_act) if words_act else 0.0
+    precision = len(matched) / len(set_act)
+    recall = len(matched) / len(set_exp)
 
-    if recall_exp >= 0.35 or any(w in norm_act for w in words_usr if len(w) > 3):
-        score = min(1.0, recall_exp * 1.5 + 0.3)
+    if precision + recall == 0:
+        f1 = 0.0
     else:
-        score = recall_exp
+        f1 = 2 * precision * recall / (precision + recall)
 
+    # Small relevance bonus only when actual substantially echoes the user's own
+    # distinctive query terms (helps short-but-correct answers to narrow RAG specs),
+    # capped low so it cannot by itself push an otherwise-ungrounded answer to PASS.
+    bonus = 0.0
+    set_usr = {w for w in words_usr if len(w) > 3}
+    if set_usr:
+        usr_hits = sum(1 for w in set_usr if w in norm_act)
+        if usr_hits / len(set_usr) >= 0.6:
+            bonus = 0.05
+
+    score = min(1.0, f1 + bonus)
     return round(score, 3)
 
 
