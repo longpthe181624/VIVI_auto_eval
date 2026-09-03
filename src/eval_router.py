@@ -6,7 +6,7 @@ import re
 from typing import Dict, Any
 import src.config as config
 from pathlib import Path
-from src.eval_tools import rag_rule_search, rag_spec_search, web_search_verification, compute_similarity, eval_test_result, extract_relevant_sentence
+from src.eval_tools import rag_rule_search, rag_spec_search, web_search_verification, compute_similarity, compute_text_overlap_similarity, eval_test_result, extract_relevant_sentence
 from src.eval_trace import generate_trace_log, classify_severity, calculate_semantic_error_pct
 
 
@@ -104,13 +104,42 @@ class AdaptiveEvalRouter:
     ) -> Dict[str, Any]:
         """Helper to construct enriched evaluation result with trace_id, severity, and error metrics."""
         sim_val = score / 100.0
-        
+
         # Perform real word/phrase-level semantic diff on FAIL or RETEST when expected spec exists
         if auto_result in ["FAIL", "RETEST"] and expected_resp:
             from src.eval_trace import compute_semantic_diff
             diff_res = compute_semantic_diff(expected_resp, actual_resp)
             if diff_res.get("missing_keywords"):
                 rca = f"{rca} [{diff_res['diff_summary']}]"
+
+        # LLM Judge escalation: the keyword-overlap scorer flags RETEST when it is
+        # genuinely uncertain (e.g. a correctly-phrased answer that paraphrases the
+        # reference instead of echoing its exact wording). STT mismatches and
+        # empty-response RETESTs are not content-correctness questions, so they are
+        # excluded. Only escalates when there is real reference content to judge
+        # against; falls back to the original RETEST verdict if the judge call
+        # itself is unresolved (timeout/error) - it must never silently invent a
+        # verdict. (A multi-agent debate design was tried first and discarded -
+        # see llm_judge.py docstring for why.)
+        if auto_result == "RETEST" and not is_stt_mismatch and actual_resp and actual_resp.strip():
+            reference_text = expected_resp.strip() if expected_resp else ""
+            if not reference_text and retrieved_chunks:
+                reference_text = retrieved_chunks[0].get("content", "")
+            if reference_text:
+                from src.llm_judge import run_judge
+                judge_res = run_judge(user_cmd, actual_resp, reference_text)
+                if judge_res.get("resolved"):
+                    judge_verdict = judge_res["verdict"]
+                    rca = f"{rca} [LLM Judge Verdict: {judge_verdict}]"
+                    if judge_verdict == "PASS":
+                        auto_result = "PASS"
+                        score = max(score, 80.0)
+                        sim_val = score / 100.0
+                        remediation = "No action required."
+                    elif judge_verdict == "FAIL":
+                        auto_result = "FAIL"
+                        # Keep the original (already low) keyword score - it already
+                        # reflects the mismatch; no need to override.
 
         trace = generate_trace_log(
             test_id=name,
@@ -181,7 +210,7 @@ class AdaptiveEvalRouter:
         # STT Hearing Mismatch Check
         is_stt_mismatch = False
         if norm_lis and norm_usr and norm_lis != norm_usr:
-            stt_sim = compute_similarity(actual=norm_lis, expected=norm_usr)
+            stt_sim = compute_text_overlap_similarity(norm_lis, norm_usr)
             is_wakeword_only = norm_lis in ["hey vinfast", "vinfast", "ví vi", "vivi", "hey vivi", "xin chào vinfast", "chào vinfast"]
             if is_wakeword_only or (len(norm_usr) > 20 and stt_sim < 0.70):
                 is_stt_mismatch = True
@@ -218,9 +247,11 @@ class AdaptiveEvalRouter:
                     snippet = extract_relevant_sentence(top_spec.get('content', ''), user_cmd_clean)
                     rule_spec_str = f"[Owner Manual: {src_name}] {snippet}"
                 else:
-                    web_verif = web_search_verification(query=user_cmd_clean, max_results=2)
-                    gt_info = web_verif.get("summary", "")
-                    rule_spec_str = f"[Verified Fact] {extract_relevant_sentence(gt_info, user_cmd_clean)}" if gt_info else "N/A"
+                    # No local RAG match and no Expected_resp - the verdict below
+                    # is RETEST regardless (bench log captured no answer at all),
+                    # so a web lookup here would only decorate the RCA text, not
+                    # change the outcome. Skipped to avoid unnecessary web calls.
+                    rule_spec_str = "N/A"
 
             return self._build_result(
                 name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,
@@ -243,9 +274,9 @@ class AdaptiveEvalRouter:
                     snippet = extract_relevant_sentence(top_spec.get('content', ''), user_cmd_clean)
                     rule_spec_str = f"[Owner Manual: {src_name}] {snippet}"
                 else:
-                    web_verif = web_search_verification(query=user_cmd_clean, max_results=2)
-                    gt_info = web_verif.get("summary", "")
-                    rule_spec_str = f"[Verified Fact] {extract_relevant_sentence(gt_info, user_cmd_clean)}" if gt_info else "N/A"
+                    # Same reasoning as above - verdict is FAIL regardless
+                    # (response is truncated), a web lookup wouldn't change it.
+                    rule_spec_str = "N/A"
 
             return self._build_result(
                 name=name, user_cmd=user_cmd, vivi_listen=vivi_listen, actual_resp=actual_resp, expected_resp=expected_resp,

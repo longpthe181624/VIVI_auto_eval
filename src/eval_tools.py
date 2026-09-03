@@ -5,8 +5,36 @@ Ported from AQC tool execution pattern for RAG-build-demo-1.
 
 import json
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 import src.config as config
+
+try:
+    from pyvi import ViTokenizer
+    _HAS_PYVI = True
+except ImportError:
+    _HAS_PYVI = False
+
+# Vietnamese compound words are written as separate syllables ("điều hòa" =
+# air conditioner, "điều kiện" = condition) - naive whitespace/regex
+# tokenization splits both into the single syllable "điều" plus a second
+# syllable, so two completely unrelated compound words register as a
+# "matched word" on that shared syllable. This inflated compute_similarity()
+# scores for answers that were actually off-topic (e.g. an air-conditioning
+# answer scoring 84.7% against an airbag-system reference purely because
+# "điều" from "điều hòa" matched "điều" from "điều kiện"/"điều chỉnh").
+# pyvi's CRF-based segmenter joins recognized compounds with an underscore
+# ("điều_kiện") so they only match the same compound, not any word sharing a
+# syllable. It does not catch every compound (e.g. it missed "túi khí" in
+# testing), so this is a mitigation, not a complete fix - but it is fast
+# (~0.2ms/call) and removes the clearest false-match cases.
+def tokenize_vi(text: str) -> List[str]:
+    if not text:
+        return []
+    if _HAS_PYVI:
+        segmented = ViTokenizer.tokenize(text)
+        return re.findall(r"[\w_]+", segmented)
+    return re.findall(r"\w+", text)
+
 
 def normalize_text(text: str) -> str:
     if not text:
@@ -52,19 +80,54 @@ def extract_relevant_sentence(text: str, query: str, max_chars: int = 160) -> st
     return res
 
 
+def compute_text_overlap_similarity(text_a: str, text_b: str) -> float:
+    """Computes symmetric word-overlap similarity (Dice coefficient) between two
+    short, comparably-sized texts - e.g. an STT transcript vs. the target command.
+
+    Unlike compute_similarity() (grounding a bot's answer against a much longer
+    expected spec/document chunk), there is no length asymmetry here: both texts
+    are normally short utterances of roughly the same length, so a simple
+    intersection-over-average-length ratio is the right measure, with no
+    absolute-word-count floor needed.
+    """
+    norm_a = normalize_text(text_a)
+    norm_b = normalize_text(text_b)
+
+    if not norm_a or not norm_b:
+        return 0.0
+    if norm_a == norm_b:
+        return 1.0
+
+    stopwords = {"là", "gì", "của", "và", "cho", "người", "xe", "trong", "được", "các", "với", "những", "để", "có", "thể", "có_thể", "nào", "này", "khi", "vf", "vf8", "vf8np"}
+    words_a = set(w for w in tokenize_vi(norm_a) if w not in stopwords and len(w) > 1)
+    words_b = set(w for w in tokenize_vi(norm_b) if w not in stopwords and len(w) > 1)
+
+    if not words_a or not words_b:
+        return 0.0
+
+    matched = words_a & words_b
+    return round(2 * len(matched) / (len(words_a) + len(words_b)), 3)
+
+
 def compute_similarity(actual: str, expected: str, user_cmd: str = "") -> float:
     """Computes factual accuracy and keyword grounding similarity score (0.0 to 1.0).
 
-    Uses precision+recall (F1) over the unique non-stopword vocabulary shared between
-    actual and expected. Precision alone (how much of actual's vocab is grounded in
-    expected) is not sufficient: a short generic response sharing only a handful of
-    common words with a long expected spec can hit high precision while covering
-    almost none of the expected content. Recall (how much of expected's distinctive
-    content is actually covered) is required to catch that case.
+    Score is precision (how much of actual's vocabulary is grounded in expected),
+    gated by an absolute matched-word-count coverage factor. Precision alone is not
+    safe: a short generic response (e.g. a decline message) can share just a
+    handful of common words with a long expected spec and hit a high precision
+    ratio despite covering almost none of the expected content. Full recall over
+    the whole expected text is also not safe here, since `expected` is frequently
+    an entire retrieved Owner-Manual chunk (covering more ground than the specific
+    question), which would unfairly penalize short, correct, on-point answers.
+    The matched-word-count floor is the calibrated middle ground: it discounts
+    scores built from very few overlapping words regardless of ratio, without
+    requiring the answer to restate the full expected chunk. Thresholds calibrated
+    against ~1,100 real production rows (confirmed-bad decline-style false
+    positives vs. confirmed-good answers).
     """
     norm_act = normalize_text(actual)
     norm_exp = normalize_text(expected)
-    norm_usr = normalize_text(user_cmd)
 
     if not norm_act:
         return 0.0
@@ -76,37 +139,23 @@ def compute_similarity(actual: str, expected: str, user_cmd: str = "") -> float:
     if norm_act == norm_exp:
         return 1.0
 
-    stopwords = {"là", "gì", "của", "và", "cho", "người", "xe", "trong", "được", "các", "với", "những", "để", "có", "thể", "nào", "này", "khi", "vf", "vf8", "vf8np"}
-    words_act = [w for w in re.findall(r"\w+", norm_act) if w not in stopwords and len(w) > 1]
-    words_exp = [w for w in re.findall(r"\w+", norm_exp) if w not in stopwords and len(w) > 1]
-    words_usr = [w for w in re.findall(r"\w+", norm_usr) if w not in stopwords and len(w) > 1]
+    stopwords = {"là", "gì", "của", "và", "cho", "người", "xe", "trong", "được", "các", "với", "những", "để", "có", "thể", "có_thể", "nào", "này", "khi", "vf", "vf8", "vf8np"}
+    words_act = set(w for w in tokenize_vi(norm_act) if w not in stopwords and len(w) > 1)
+    words_exp = set(w for w in tokenize_vi(norm_exp) if w not in stopwords and len(w) > 1)
 
-    if not words_act or not words_exp:
+    if not words_act:
         return 0.0
 
-    set_act = set(words_act)
-    set_exp = set(words_exp)
-    matched = set_act & set_exp
+    matched = words_act & words_exp
+    matched_count = len(matched)
+    if matched_count == 0:
+        return 0.0
 
-    precision = len(matched) / len(set_act)
-    recall = len(matched) / len(set_exp)
+    precision = matched_count / len(words_act)
+    coverage_factor = min(1.0, matched_count / 12.0)
+    boosted = min(1.0, precision * 1.15) if precision >= 0.4 else precision
 
-    if precision + recall == 0:
-        f1 = 0.0
-    else:
-        f1 = 2 * precision * recall / (precision + recall)
-
-    # Small relevance bonus only when actual substantially echoes the user's own
-    # distinctive query terms (helps short-but-correct answers to narrow RAG specs),
-    # capped low so it cannot by itself push an otherwise-ungrounded answer to PASS.
-    bonus = 0.0
-    set_usr = {w for w in words_usr if len(w) > 3}
-    if set_usr:
-        usr_hits = sum(1 for w in set_usr if w in norm_act)
-        if usr_hits / len(set_usr) >= 0.6:
-            bonus = 0.05
-
-    score = min(1.0, f1 + bonus)
+    score = boosted * coverage_factor
     return round(score, 3)
 
 
@@ -322,9 +371,13 @@ def web_search_verification(query: str, max_results: int = 3) -> Dict[str, Any]:
 
     try:
         try:
-            from duckduckgo_search import DDGS
-        except ImportError:
+            # Prefer the actively-maintained `ddgs` package - the older
+            # `duckduckgo_search` name is deprecated and, as installed here
+            # (8.1.1), is broken against DuckDuckGo's current response format
+            # (silently returns 0 results or raises "Body collection error").
             from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         results = []
         with DDGS(timeout=2) as ddgs:

@@ -15,13 +15,16 @@ __pycache__/
 # Local Vector Database & Indices
 db/
 db_rules/
+data/kb/
 
 # Generated Evaluation Output Excel files
 data/evaluated_*.xlsx
 evaluated_*.xlsx
+*kết quả*.xlsx
 data/temp_uploads/
 
 # IDE & OS settings
 .vscode/
 .idea/
+.claude/
 .DS_Store

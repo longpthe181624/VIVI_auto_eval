@@ -30,3 +30,6 @@ ddgs>=9.0.0
 python-dotenv>=1.0.0
 requests
 tqdm
+
+# Vietnamese Word Segmentation (compound-word tokenization for scoring)
+pyvi>=0.1.1

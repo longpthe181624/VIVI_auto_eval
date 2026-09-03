@@ -155,6 +155,8 @@ def generate_trace_log(
         "user_cmd": user_cmd,
         "vivi_listen": vivi_listen,
         "stt_match": not is_stt_mismatch,
+        "is_stt_mismatch": is_stt_mismatch,
+        "is_false_refusal": is_false_refusal,
         "actual_resp": actual_resp,
         "expected_resp": expected_resp,
         "auto_result": auto_result,

@@ -30,12 +30,16 @@ def get_embedding_model():
     if _CACHED_EMBEDDING_MODEL is not None:
         return _CACHED_EMBEDDING_MODEL
 
+    from src.embedding_trace import TracedEmbeddings
+
     if OPENAI_API_KEY and OPENAI_API_KEY != "your_openai_api_key_here":
         from langchain_openai import OpenAIEmbeddings
-        _CACHED_EMBEDDING_MODEL = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=OPENAI_API_KEY)
+        inner = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=OPENAI_API_KEY)
+        _CACHED_EMBEDDING_MODEL = TracedEmbeddings(inner, provider="openai", model_name=EMBEDDING_MODEL)
     else:
         print("ℹ️ OPENAI_API_KEY not set. Using local HuggingFace embeddings ('all-MiniLM-L6-v2').")
         from langchain_huggingface import HuggingFaceEmbeddings
-        _CACHED_EMBEDDING_MODEL = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        inner = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        _CACHED_EMBEDDING_MODEL = TracedEmbeddings(inner, provider="huggingface", model_name="all-MiniLM-L6-v2")
     return _CACHED_EMBEDDING_MODEL
 

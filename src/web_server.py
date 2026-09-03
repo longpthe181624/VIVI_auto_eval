@@ -6,7 +6,7 @@ import time
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +27,10 @@ from src.excel_evaluator import ExcelTestEvaluator, detect_testcase_category, tr
 from src.eval_router import AdaptiveEvalRouter
 from src.rag_chain import RAGChatbot, get_vector_store
 from src.ingest import ingest_documents, load_text_documents, load_excel_rule_documents, is_test_result_file, ingest_single_file, delete_single_file_vectors
+from src.report_builder import (
+    EXTENDED_HEADERS, build_extended_row, style_header_row, style_data_row,
+    autosize_columns, build_summary_sheet, extract_domain,
+)
 
 app = FastAPI(title="VIVI Auto-Eval Desktop Server", version="2.0.0")
 
@@ -115,8 +119,10 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
         fail_cnt = 0
         retest_cnt = 0
         results_preview = []
+        severity_counts: Dict[str, int] = {"PASS": 0, "LOW": 0, "MEDIUM": 0, "HIGH": 0}
+        domain_stats: Dict[str, Dict[str, int]] = {}
 
-        new_headers = ["Auto_Eval_Result", "Similarity_Score(%)", "Matched_Rule_Spec", "Root_Cause_Analysis", "Suggested_Remediation"]
+        new_headers = EXTENDED_HEADERS
 
         for sheet_name in wb_in.sheetnames:
             ws_in = wb_in[sheet_name]
@@ -152,10 +158,12 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
             col_start_idx = col_map["auto_eval_start"] + 1 if "auto_eval_start" in col_map else len(clean_header) + 1
             full_header = clean_header + new_headers
             ws_out.append(full_header)
+            style_header_row(ws_out, ws_out.max_row, col_start_idx, len(full_header))
 
             file_category = detect_testcase_category(input_path.name, sheet_name)
 
-            for r_idx, row_vals in enumerate(raw_rows_buffer, 1):
+            def process_one_row(item):
+                r_idx, row_vals = item
                 name_val = str(row_vals[col_map["name"]]).strip() if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] is not None else f"TC_{r_idx}"
                 user_cmd = str(row_vals[col_map["user_command"]]).strip() if "user_command" in col_map and col_map["user_command"] < len(row_vals) and row_vals[col_map["user_command"]] is not None else ""
                 vivi_listen = str(row_vals[col_map["vivi_listen"]]).strip() if "vivi_listen" in col_map and col_map["vivi_listen"] < len(row_vals) and row_vals[col_map["vivi_listen"]] is not None else ""
@@ -170,55 +178,74 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
                     category=file_category,
                     vivi_listen=vivi_listen
                 )
+                return r_idx, row_vals, name_val, user_cmd, actual_resp, expected_resp, res
 
-                status = res["auto_result"]
-                eval_count += 1
-                if status == "PASS":
-                    pass_cnt += 1
-                elif status == "FAIL":
-                    fail_cnt += 1
-                else:
-                    retest_cnt += 1
+            # Process rows in parallel (16 workers, matching the CLI path) instead of
+            # one at a time - previously this loop ran sequentially, and with the LLM
+            # Judge escalation (~4.6s/case on RETEST rows) that made large files take
+            # tens of minutes even on an idle machine. Progress is still updated
+            # incrementally via as_completed(), not just when the whole batch finishes.
+            items = list(enumerate(raw_rows_buffer, 1))
+            rows_by_idx: Dict[int, Any] = {}
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                futures = {pool.submit(process_one_row, item): item[0] for item in items}
+                for future in as_completed(futures):
+                    r_idx, row_vals, name_val, user_cmd, actual_resp, expected_resp, res = future.result()
 
-                elapsed = max(0.1, time.time() - start_time)
-                task["evaluated_rows"] = eval_count
-                task["pass_count"] = pass_cnt
-                task["fail_count"] = fail_cnt
-                task["retest_count"] = retest_cnt
-                task["progress_pct"] = min(100.0, round((eval_count / task["total_rows"]) * 100, 1))
-                task["rows_per_sec"] = round(eval_count / elapsed, 1)
+                    status = res["auto_result"]
+                    severity = res.get("severity", "MEDIUM")
+                    eval_count += 1
+                    severity_counts[severity] = severity_counts.get(severity, 0) + 1
+                    if status == "PASS":
+                        pass_cnt += 1
+                    elif status == "FAIL":
+                        fail_cnt += 1
+                    else:
+                        retest_cnt += 1
 
-                eval_row_data = {
-                    "id": name_val,
-                    "user_command": user_cmd,
-                    "actual_resp": actual_resp,
-                    "expected_resp": expected_resp,
-                    "status": status,
-                    "score": res["score"],
-                    "rule_info": res["rule_info"],
-                    "rca": res["rca"],
-                    "remediation": res["remediation"],
-                    "trace_id": res.get("trace_id", ""),
-                    "severity": res.get("severity", "PASS"),
-                    "semantic_error_pct": res.get("semantic_error_pct", 0.0),
-                    "error_category": res.get("error_category", "NONE"),
-                    "trace_log": res.get("trace_log", {})
-                }
-                if status in ["FAIL", "RETEST"] or len(results_preview) < 5000:
-                    results_preview.append(eval_row_data)
+                    domain = extract_domain(name_val)
+                    d_stats = domain_stats.setdefault(domain, {"total": 0, "pass": 0, "fail": 0, "retest": 0})
+                    d_stats["total"] += 1
+                    d_stats["pass" if status == "PASS" else "fail" if status == "FAIL" else "retest"] += 1
 
-                # Write output row
+                    elapsed = max(0.1, time.time() - start_time)
+                    task["evaluated_rows"] = eval_count
+                    task["pass_count"] = pass_cnt
+                    task["fail_count"] = fail_cnt
+                    task["retest_count"] = retest_cnt
+                    task["progress_pct"] = min(100.0, round((eval_count / task["total_rows"]) * 100, 1))
+                    task["rows_per_sec"] = round(eval_count / elapsed, 1)
+
+                    eval_row_data = {
+                        "id": name_val,
+                        "user_command": user_cmd,
+                        "actual_resp": actual_resp,
+                        "expected_resp": expected_resp,
+                        "status": status,
+                        "score": res["score"],
+                        "rule_info": res["rule_info"],
+                        "rca": res["rca"],
+                        "remediation": res["remediation"],
+                        "trace_id": res.get("trace_id", ""),
+                        "severity": res.get("severity", "PASS"),
+                        "semantic_error_pct": res.get("semantic_error_pct", 0.0),
+                        "error_category": res.get("error_category", "NONE"),
+                        "trace_log": res.get("trace_log", {})
+                    }
+                    if status in ["FAIL", "RETEST"] or len(results_preview) < 5000:
+                        results_preview.append(eval_row_data)
+
+                    rows_by_idx[r_idx] = (row_vals, res, severity)
+
+            # Write rows to the output sheet in the original input order, not
+            # completion order (parallel execution finishes rows out of order).
+            for r_idx in sorted(rows_by_idx.keys()):
+                row_vals, res, severity = rows_by_idx[r_idx]
                 clean_row_vals = list(row_vals[:max_col_idx])
                 if len(clean_row_vals) < max_col_idx:
                     clean_row_vals.extend([""] * (max_col_idx - len(clean_row_vals)))
 
-                append_vals = [
-                    res["auto_result"],
-                    res["score"],
-                    res["rule_info"],
-                    res["rca"],
-                    res["remediation"],
-                ]
+                append_vals = build_extended_row(res)
 
                 if "auto_eval_start" in col_map:
                     out_row = clean_row_vals[:col_map["auto_eval_start"]] + append_vals
@@ -226,6 +253,11 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
                     out_row = clean_row_vals + append_vals
 
                 ws_out.append(out_row)
+                style_data_row(ws_out, ws_out.max_row, col_start_idx, len(out_row), severity)
+
+            autosize_columns(ws_out, full_header)
+
+        build_summary_sheet(wb_out, eval_count, pass_cnt, fail_cnt, retest_cnt, severity_counts, domain_stats)
 
         output_file_name = f"evaluated_{input_path.stem}_{time.strftime('%Y%m%d_%H%M%S')}.xlsx"
         output_file_path = Path(config.DATA_DIR) / output_file_name
@@ -244,6 +276,16 @@ def run_batch_evaluation_task(task_id: str, file_path: str):
 # -------------------------------------------------------------------
 # REST API ENDPOINTS
 # -------------------------------------------------------------------
+
+@app.get("/api/embedding/trace")
+def get_embedding_trace(limit: int = 100):
+    """Returns embedding-model call statistics and recent call log for monitoring."""
+    from src.embedding_trace import get_embedding_trace_summary, get_recent_calls
+    return {
+        "summary": get_embedding_trace_summary(),
+        "recent_calls": get_recent_calls(limit=limit),
+    }
+
 
 @app.get("/api/data/categories")
 def list_categories():

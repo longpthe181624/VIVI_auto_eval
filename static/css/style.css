@@ -444,6 +444,25 @@ body {
 .badge-retest { background-color: var(--color-retest-bg); color: var(--color-retest); }
 
 /* -------------------------------------------------------------------
+   DOMAIN BREAKDOWN BAR
+   ------------------------------------------------------------------- */
+.error-share-bar {
+  display: flex;
+  height: 14px;
+  width: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.error-share-bar .seg-pass { background-color: var(--color-pass); height: 100%; }
+.error-share-bar .seg-fail { background-color: var(--color-fail); height: 100%; }
+.error-share-bar .seg-retest { background-color: var(--color-retest); height: 100%; }
+.fail-rate-text { font-weight: 700; }
+.fail-rate-high { color: var(--color-fail); }
+.fail-rate-med { color: var(--color-retest); }
+.fail-rate-low { color: var(--color-pass); }
+
+/* -------------------------------------------------------------------
    RAG CHAT & SINGLE RCA LAYOUTS
    ------------------------------------------------------------------- */
 .chat-layout {

@@ -53,6 +53,10 @@ function initBatchEvaluation() {
   const statFail = document.getElementById("stat-fail");
   const statRetest = document.getElementById("stat-retest");
 
+  const domainBreakdownPanel = document.getElementById("domain-breakdown-panel");
+  const domainBreakdownBody = document.getElementById("domain-breakdown-body");
+  const domainBreakdownSubtitle = document.getElementById("domain-breakdown-subtitle");
+
   const resultsPanel = document.getElementById("results-panel");
   const resultsTableBody = document.getElementById("results-table-body");
   const btnDownloadReport = document.getElementById("btn-download-report");
@@ -162,6 +166,7 @@ function initBatchEvaluation() {
             latestOutputFile = task.output_file || "";
             resultsPanel.classList.remove("hidden");
             renderResultsTable();
+            renderDomainBreakdown();
           } else {
             progressStatusText.textContent = `Evaluation Failed: ${task.error || "Unknown error"}`;
           }
@@ -202,10 +207,34 @@ function initBatchEvaluation() {
 
   searchInput.addEventListener("input", () => renderResultsTable());
 
-  btnDownloadReport.addEventListener("click", () => {
-    if (latestOutputFile) {
-      window.location.href = `/api/eval/download/${latestOutputFile}`;
+  btnDownloadReport.addEventListener("click", async () => {
+    if (!latestOutputFile) return;
+
+    // Inside the pywebview desktop shell, navigating to a binary file
+    // response does not trigger a native "Save As" dialog the way a real
+    // browser does - the click silently does nothing. When running inside
+    // the desktop app, use the exposed Python API instead, which opens a
+    // real save dialog and copies the file directly from disk.
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.save_evaluated_report) {
+      try {
+        const result = await window.pywebview.api.save_evaluated_report(latestOutputFile);
+        if (result && result.ok) {
+          alert(`Report saved to: ${result.path}`);
+        } else if (result && !result.cancelled) {
+          alert(`Could not save report: ${result.error || "Unknown error"}`);
+        }
+      } catch (e) {
+        alert(`Could not save report: ${e.message}`);
+      }
+      return;
     }
+
+    // Real output filenames contain spaces, parentheses, and Vietnamese
+    // diacritics (e.g. "evaluated_..._kết quảOM8NP (2)_...xlsx") - without
+    // encoding, navigating to this URL directly fails silently (the browser
+    // rejects the malformed URL), which is why the button appeared to do
+    // nothing.
+    window.location.href = `/api/eval/download/${encodeURIComponent(latestOutputFile)}`;
   });
 
   function renderResultsTable() {
@@ -266,6 +295,75 @@ function initBatchEvaluation() {
       tr.addEventListener("click", () => showTraceModal(row));
       resultsTableBody.appendChild(tr);
     });
+  }
+
+  function extractDomain(testId) {
+    // Test names follow the pattern "[Model-Domain-Number] Verify ..." e.g.
+    // "[VF8-Gioithieu-0001] ..." or "[VF8-Dongmo khoangchua-0004] ...".
+    if (!testId) return "Unknown";
+    const match = testId.match(/\[[^\-\]]+-([^\-\]]+)-\d+\]/);
+    return match ? match[1].trim() : "Unknown";
+  }
+
+  function renderDomainBreakdown() {
+    if (!allResults.length) {
+      domainBreakdownPanel.classList.add("hidden");
+      return;
+    }
+
+    const stats = {};
+    allResults.forEach((row) => {
+      const domain = extractDomain(row.id);
+      if (!stats[domain]) {
+        stats[domain] = { domain, total: 0, pass: 0, fail: 0, retest: 0 };
+      }
+      stats[domain].total += 1;
+      if (row.status === "PASS") stats[domain].pass += 1;
+      else if (row.status === "FAIL") stats[domain].fail += 1;
+      else if (row.status === "RETEST") stats[domain].retest += 1;
+    });
+
+    const rows = Object.values(stats).map((s) => {
+      const errorCount = s.fail + s.retest;
+      const failRatePct = s.total > 0 ? (errorCount / s.total) * 100 : 0;
+      return { ...s, errorCount, failRatePct };
+    });
+
+    // Worst domains (highest error rate) first, so problem areas surface immediately.
+    rows.sort((a, b) => b.failRatePct - a.failRatePct || b.errorCount - a.errorCount);
+
+    domainBreakdownSubtitle.textContent = `${rows.length} domains detected — sorted by error rate (Fail + Retest) descending`;
+
+    domainBreakdownBody.innerHTML = "";
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const passPct = (r.pass / r.total) * 100;
+      const failPct = (r.fail / r.total) * 100;
+      const retestPct = (r.retest / r.total) * 100;
+
+      let rateClass = "fail-rate-low";
+      if (r.failRatePct >= 40) rateClass = "fail-rate-high";
+      else if (r.failRatePct >= 15) rateClass = "fail-rate-med";
+
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(r.domain)}</strong></td>
+        <td>${r.total}</td>
+        <td style="color: var(--color-pass);">${r.pass}</td>
+        <td style="color: var(--color-fail);">${r.fail}</td>
+        <td style="color: var(--color-retest);">${r.retest}</td>
+        <td class="fail-rate-text ${rateClass}">${r.failRatePct.toFixed(1)}%</td>
+        <td>
+          <div class="error-share-bar" title="Pass ${passPct.toFixed(0)}% / Fail ${failPct.toFixed(0)}% / Retest ${retestPct.toFixed(0)}%">
+            <div class="seg-pass" style="width:${passPct}%"></div>
+            <div class="seg-fail" style="width:${failPct}%"></div>
+            <div class="seg-retest" style="width:${retestPct}%"></div>
+          </div>
+        </td>
+      `;
+      domainBreakdownBody.appendChild(tr);
+    });
+
+    domainBreakdownPanel.classList.remove("hidden");
   }
 }
 

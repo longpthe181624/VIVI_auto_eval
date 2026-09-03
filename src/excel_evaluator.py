@@ -17,18 +17,14 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.styles import Alignment
 import src.config as config
 from src.eval_tools import rag_rule_search, eval_test_result, web_search_verification
 from src.test_eval_agent import TestEvalAgent
-
-
-# Fill styles for output Excel formatting
-PASS_FILL = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")  # Light green
-FAIL_FILL = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")  # Light red
-RETEST_FILL = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")  # Light yellow
-HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")  # Navy blue
-HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+from src.report_builder import (
+    EXTENDED_HEADERS, build_extended_row, style_header_row, style_data_row,
+    autosize_columns, build_summary_sheet, extract_domain, SEVERITY_FILLS,
+)
 
 
 def _detect_columns(header_row: List[Any]) -> Dict[str, int]:
@@ -157,8 +153,10 @@ class ExcelTestEvaluator:
         pass_count = 0
         fail_count = 0
         retest_count = 0
+        severity_counts: Dict[str, int] = {"PASS": 0, "LOW": 0, "MEDIUM": 0, "HIGH": 0}
+        domain_stats: Dict[str, Dict[str, int]] = {}
 
-        new_headers = ["Auto_Eval_Result", "Similarity_Score(%)", "Matched_Rule_Spec", "Root_Cause_Analysis", "Suggested_Remediation"]
+        new_headers = EXTENDED_HEADERS
 
         for sheet_name in wb_in.sheetnames:
             ws_in = wb_in[sheet_name]
@@ -207,14 +205,7 @@ class ExcelTestEvaluator:
 
             full_header = clean_header + new_headers
             ws_out.append(full_header)
-
-            # Format header cells
-            for c_idx in range(1, len(full_header) + 1):
-                cell = ws_out.cell(row=ws_out.max_row, column=c_idx)
-                if c_idx >= col_start_idx:
-                    cell.fill = HEADER_FILL
-                    cell.font = HEADER_FONT
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
+            style_header_row(ws_out, ws_out.max_row, col_start_idx, len(full_header))
 
             file_category = detect_testcase_category(input_path.name, sheet_name)
 
@@ -245,35 +236,41 @@ class ExcelTestEvaluator:
 
             for r_idx, row_vals, res in eval_results:
                 status = res["auto_result"]
+                severity = res.get("severity", "MEDIUM")
                 total_eval_count += 1
+                severity_counts[severity] = severity_counts.get(severity, 0) + 1
                 if status == "PASS":
                     pass_count += 1
-                    fill = PASS_FILL
                 elif status == "FAIL":
                     fail_count += 1
-                    fill = FAIL_FILL
                 else:
                     retest_count += 1
-                    fill = RETEST_FILL
+
+                name_val = str(row_vals[col_map["name"]]).strip() if "name" in col_map and col_map["name"] < len(row_vals) and row_vals[col_map["name"]] is not None else f"TC_{r_idx}"
+                domain = extract_domain(name_val)
+                d_stats = domain_stats.setdefault(domain, {"total": 0, "pass": 0, "fail": 0, "retest": 0})
+                d_stats["total"] += 1
+                d_stats["pass" if status == "PASS" else "fail" if status == "FAIL" else "retest"] += 1
 
                 # Build row values
                 base_row = list(row_vals[:max_col_idx])
                 while len(base_row) < max_col_idx:
                     base_row.append("")
 
-                eval_values = [res["auto_result"], res["score"], res["rule_info"], res["rca"], res["remediation"]]
-                out_row_vals = base_row + eval_values
+                out_row_vals = base_row + build_extended_row(res)
                 ws_out.append(out_row_vals)
 
                 curr_row = ws_out.max_row
-                c1 = ws_out.cell(row=curr_row, column=col_start_idx)
-                c1.fill = fill
-                c1.alignment = Alignment(horizontal="center")
+                style_data_row(ws_out, curr_row, col_start_idx, len(out_row_vals), severity)
 
                 if "prev_result" in col_map and col_map["prev_result"] < len(base_row):
                     orig_res_cell = ws_out.cell(row=curr_row, column=col_map["prev_result"] + 1, value=res["auto_result"])
-                    orig_res_cell.fill = fill
+                    orig_res_cell.fill = SEVERITY_FILLS.get(severity)
                     orig_res_cell.alignment = Alignment(horizontal="center")
+
+            autosize_columns(ws_out, full_header)
+
+        build_summary_sheet(wb_out, total_eval_count, pass_count, fail_count, retest_count, severity_counts, domain_stats)
 
         # Determine output filename
         if not output_excel_path:
